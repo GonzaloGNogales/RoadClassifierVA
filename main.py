@@ -22,16 +22,16 @@ if __name__ == "__main__":
         raise ValueError('Wrong classifier type :(')
 
     # Load train data
-    detector.preprocess_data(vars(args)['train_path'])
+    detector.preprocess_data(vars(args)['train_path'], True)
 
-    # Tratamiento de los datos
+    # LDA dimensionality reduction
     detector.dimensionality_reduction()
 
-    # Entrenar el clasificador si es necesario ...
-    # detector ...
+    # Train the classifier
+    detector.train()
 
-    # Cargar y procesar imgs de test
-    # args.train_path ...
+    # Load test data
+    detector.preprocess_data(vars(args)['test_path'], False)
 
-    # Guardar los resultados en ficheros de texto (en el directorio donde se
-    # ejecuta el main.py) tal y como se pide en el enunciado.
+    # Predict con test data, this automatically saves the results on the 'resultado.txt' file
+    detector.predict()
