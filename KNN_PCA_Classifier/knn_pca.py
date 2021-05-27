@@ -26,6 +26,8 @@ class KNN_PCA:
         print("Accuracy in training =>",
               "{0:.4}".format((np.sum(1 * (np.int32(Y_train) == predicted_train)) / Y_train.shape[0]) * 100), "%")
 
+        return predicted_train
+
     def predict(self, X_test, Y_test):
         # Dimensionality reduction with pre-trained LDA for predicting on test data batch
         X_test = self.pca.transform(X_test)
