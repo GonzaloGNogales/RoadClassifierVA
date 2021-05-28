@@ -56,3 +56,18 @@ class Euclidean_LDA:
               "{0:.4}".format((np.sum(1 * (np.int32(Y_test) == predicted_test)) / Y_test.shape[0]) * 100), "%")
 
         return predicted_test
+
+    # EXERCISE 3 MODIFIED PREDICT AS IT IS NON SUPERVISED
+    def classify_on_detector(self, X_test):
+        # Dimensionality reduction with pre-trained LDA for predicting on test data batch
+        X_test = self.lda.transform(X_test)
+
+        # Perform predict for extracting training accuracy
+        predicted_test = list()
+        for i in range(len(X_test)):
+            actual_distances = list()
+            for j in range(len(self.centroids)):
+                actual_distances.append(np.sqrt(np.sum((self.centroids[j] - X_test[i]) ** 2)))
+            predicted_test.append(np.argmin(actual_distances))
+
+        return predicted_test
