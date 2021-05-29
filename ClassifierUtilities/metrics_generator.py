@@ -35,11 +35,11 @@ def save_training_metrics_graphic(classes, pred, clf):
     plt.plot(x, y_train_counter, 'o-', color='blue', label='Target Accuracy')
     plt.plot(x, y_pred_counter, 'o-', color='orange', label='Classifier Accuracy')
     plt.title(clf + ' detections/class in Training')
-    plt.xlabel("Class")
-    plt.ylabel("Detections")
+    plt.xlabel('Class')
+    plt.ylabel('Detections')
     plt.legend()
     accuracy_comparison.savefig('metrics/' + clf + '_classifier_training_performance.png')
-    print("Training metrics saved on classifier_training_performance.png")
+    print('Training metrics saved on ' + ' metrics/' + clf + '_classifier_training_performance.png')
 
 
 def save_testing_metrics_graphic(total, classes, pred, clf):
@@ -66,4 +66,4 @@ def save_testing_metrics_graphic(total, classes, pred, clf):
     plt.ylabel("Detections")
     plt.legend()
     accuracy_comparison.savefig('metrics/' + clf + '_classifier_testing_performance.png')
-    print("Testing metrics saved on classifier_testing_performance.png")
+    print('Testing metrics saved on ' + ' metrics/' + clf + '_classifier_testing_performance.png')

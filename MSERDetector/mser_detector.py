@@ -1,4 +1,7 @@
 import shutil
+
+import numpy as np
+
 from DetectorUtilities.region import *
 from DetectorUtilities.progress_bar import *
 from Euclidean_LDA_Classifier.euclidean_lda import *
@@ -19,7 +22,7 @@ def save_training_metrics(x, y, x_prime, y_prime):
     plt.xlabel("Training Image Index")
     plt.ylabel("Signal Detections")
     plt.legend()
-    accuracy_comparison.savefig('single_mser_training_accuracy.png')
+    accuracy_comparison.savefig('./metrics/single_mser_training_accuracy.png')
     print("Training metrics saved on single_mser_training_accuracy.png")
 
 
@@ -32,8 +35,11 @@ class MSER_Detector:
         # Initialize Maximally Stable Extremal Regions (MSER)
         self.mser = cv2.MSER_create(_delta=delta, _max_variation=max_variation, _max_area=max_area, _min_area=min_area)
 
-        # Euclidean-LDA Classifier
+        # Euclidean-LDA Classifier b)
         self.clf = Euclidean_LDA()
+
+        # Euclidean-LDA Signal Discriminator a)
+        self.signal_discriminator = Euclidean_LDA()
 
         # Initialize the resulting masks of the detector training
         self.forbid_mask = None
@@ -111,6 +117,10 @@ class MSER_Detector:
         our_accuracy = list()
         gt_accuracy = list()
 
+        # Classes and labels for training the signal discriminator
+        X_discriminator_train = list()
+        Y_discriminator_train = list()
+
         # Train with all the preprocessed images and show the progress in the terminal with the helper function
         it = 0
         total = len(self.greyscale_images)
@@ -123,11 +133,10 @@ class MSER_Detector:
             # Detect polygons (regions) from the train image using mser detect regions operation
             regions, _ = self.mser.detectRegions(self.greyscale_images[act_img])
 
-            # Color rectangles and Mask extraction
             best_regions = {}
             for region in regions:
                 x, y, w, h = cv2.boundingRect(region)
-                if abs(1 - (w / h)) <= 0.4:  # Filter detected regions with an aspect ratio very different from a square
+                if abs(1 - (w / h)) <= 0.2:  # Filter detected regions with an aspect ratio very different from a square
                     # Adjust the width and height to obtain a perfect square for the region
                     x = max(x - 5, 0)
                     y = max(y - 5, 0)
@@ -140,8 +149,14 @@ class MSER_Detector:
 
                     reg = Region('', x, y, x + w, y + h)  # Instantiate an object to store the actual candidate region
 
+                    # Extract the region from the original image to train the discriminator
+                    crop_region = self.original_images[act_img][int(reg.y1):int(reg.y2), int(reg.x1):int(reg.x2)]
+
                     # Search the candidate region through the possible known ground-truth regions of the actual image
+                    # Train a yes-no signal discriminator using Euclidean distance and LDA
+                    # No signal : 0  ||  Signal : 1
                     if self.ground_truth.get(act_img) is not None:
+                        found = False
                         for r in self.ground_truth[act_img]:
                             if reg == r:
                                 """
@@ -151,6 +166,11 @@ class MSER_Detector:
                                 checking if a region is the same as the one in the ground-truth of an image.                          
                                 The scope of this is to reduce time complexity and to improve efficiency.
                                 """
+
+                                X_discriminator_train.append(crop_region)  # Append the signal region
+                                Y_discriminator_train.append(1)  # Append a signal label
+                                found = True
+
                                 # As we found the actual region inside the ground truth here we know that it is correct
                                 reg.type = int(r.type)
                                 # Calculate the offset error of the candidate region to filter regions that are not
@@ -164,6 +184,12 @@ class MSER_Detector:
                                     _, last_error = best_regions[reg.type]
                                     if last_error > error:
                                         best_regions[reg.type] = (reg, error)
+                        if not found:  # The actual region is not a signal
+                            X_discriminator_train.append(crop_region)  # Append the non signal region
+                            Y_discriminator_train.append(0)  # Append a non signal label
+                    else:  # If there is no signal in the gt.txt that means every region is not a signal
+                        X_discriminator_train.append(crop_region)  # Append the non signal region
+                        Y_discriminator_train.append(0)  # Append a non signal label
 
             # We can save the correctly detected images for the metrics now and start the best regions classification
             our_accuracy.append(len(best_regions))
@@ -190,7 +216,21 @@ class MSER_Detector:
                 elif best_region.type in stop_set:
                     stop_regions_list.append(crop_region)
 
-        # When the best regions filtering is finished we can prepare X_train and Y_train for classification
+        print('Training signal / non-signal discriminator...')
+
+        # Train the signal / non-signal discriminator HERE
+        # Calculate HOG descriptors and prepare data for fit
+        X_discriminator_train, Y_discriminator_train = extract_HOG_features(X_discriminator_train, Y_discriminator_train)
+
+        # Train signal / non-signal discriminator
+        predicted_train_discriminator = self.signal_discriminator.train(X_discriminator_train, Y_discriminator_train)
+
+        # Plot discriminator metrics graphic
+        set_up_metrics_directory()
+        save_training_metrics_graphic(Y_discriminator_train, predicted_train_discriminator, 'SIGNAL-EU-LDA-DISC')
+
+        # When the best regions filtering is finished and we trained the signal discriminator,
+        # we can prepare X_train and Y_train for classification
         # Based on our Euclidean - LDA classifier
         forbid_labels = np.empty(len(forbid_regions_list))
         forbid_labels.fill(0)
@@ -351,71 +391,74 @@ class MSER_Detector:
                     # Change each mser detected region to 25x25 to correlate with the training masks
                     crop_region = cv2.resize(crop_region, (25, 25))
 
-                    # Extract the M red mask from the region to compare with the training ones
-                    # Red levels in HSV approximation
-                    low_red_mask_1 = np.array([0, 120, 20])
-                    high_red_mask_1 = np.array([8, 240, 255])
-                    low_red_mask_2 = np.array([175, 120, 20])
-                    high_red_mask_2 = np.array([179, 240, 255])
+                    # With the pretrained signal/non-signal discriminator we can check if the actual candidate region
+                    # is a signal or not, if it is we start the classification
 
-                    # Orange levels in HSV approximation
-                    low_orange_mask = np.array([5, 100, 20])
-                    high_orange_mask = np.array([15, 140, 255])
+                    # Fill the X_test matrix with each computed HOG descriptors
+                    X_test, _ = extract_HOG_features([crop_region])
 
-                    # Dark Red levels in HSV approximation, this is needed for dark signals that are near black color
-                    low_darkpurple_mask = np.array([140, 25, 10])
-                    high_darkpurple_mask = np.array([145, 100, 80])
-                    low_darkred_mask = np.array([172, 75, 20])
-                    high_darkred_mask = np.array([179, 140, 100])
-                    low_darkbrown_mask = np.array([8, 50, 20])
-                    high_darkbrown_mask = np.array([18, 120, 100])
+                    # Classify the signal using our Euclidean distance classifier
+                    is_signal = self.signal_discriminator.classify_on_detector(X_test)
 
-                    crop_img_HSV = cv2.cvtColor(crop_region, cv2.COLOR_BGR2HSV)  # Change to HSV
-                    red_mask_1 = cv2.inRange(crop_img_HSV, low_red_mask_1, high_red_mask_1)
-                    red_mask_2 = cv2.inRange(crop_img_HSV, low_red_mask_2, high_red_mask_2)
-                    dark_mask_1 = cv2.inRange(crop_img_HSV, low_darkpurple_mask, high_darkpurple_mask)
-                    dark_mask_2 = cv2.inRange(crop_img_HSV, low_darkred_mask, high_darkred_mask)
-                    dark_mask_3 = cv2.inRange(crop_img_HSV, low_darkbrown_mask, high_darkbrown_mask)
-                    M_red = cv2.add(red_mask_1, red_mask_2)  # M is the red mask extracted from the detected region
-                    M_orange = cv2.inRange(crop_img_HSV, low_orange_mask, high_orange_mask)
-                    M_darkred = cv2.add(dark_mask_1, dark_mask_2, dark_mask_3)
+                    if is_signal[0] == 1:  # We detected a signal so we start the classification
+                        # Extract the M red mask from the region to compare with the training ones
+                        # Red levels in HSV approximation
+                        low_red_mask_1 = np.array([0, 120, 20])
+                        high_red_mask_1 = np.array([8, 240, 255])
+                        low_red_mask_2 = np.array([175, 120, 20])
+                        high_red_mask_2 = np.array([179, 240, 255])
 
-                    # Filter what mask gets better definition for the doing the correlation
-                    M_red_mean = M_red.mean()
-                    M_orange_mean = M_orange.mean()
-                    M_darkred_mean = M_darkred.mean()
-                    if 10 < M_red_mean < 70 or 30 < M_orange_mean < 70 or 30 < M_darkred_mean < 70:
-                        if M_darkred_mean >= M_orange_mean and M_darkred_mean >= M_red_mean:
-                            M = M_darkred
-                        elif M_orange_mean >= M_red_mean and M_orange_mean >= M_darkred_mean:
-                            M = M_orange
-                        else:
-                            M = M_red
+                        # Orange levels in HSV approximation
+                        low_orange_mask = np.array([5, 100, 20])
+                        high_orange_mask = np.array([15, 140, 255])
 
-                        # Correlate M with each mask obtained by the training: Multiply element by element
-                        forbid_correlated = M * self.forbid_mask
-                        warning_correlated = M * self.warning_mask
-                        stop_correlated = M * self.stop_mask
+                        # Dark Red levels in HSV approximation, this is needed for dark signals that are near black color
+                        low_darkpurple_mask = np.array([140, 25, 10])
+                        high_darkpurple_mask = np.array([145, 100, 80])
+                        low_darkred_mask = np.array([172, 75, 20])
+                        high_darkred_mask = np.array([179, 140, 100])
+                        low_darkbrown_mask = np.array([8, 50, 20])
+                        high_darkbrown_mask = np.array([18, 120, 100])
 
-                        # Add all the matching points between them to obtain a correlation coefficient
-                        forbid_corr_coefficient = forbid_correlated.sum()
-                        warning_corr_coefficient = warning_correlated.sum()
-                        stop_corr_coefficient = stop_correlated.sum()
+                        crop_img_HSV = cv2.cvtColor(crop_region, cv2.COLOR_BGR2HSV)  # Change to HSV
+                        red_mask_1 = cv2.inRange(crop_img_HSV, low_red_mask_1, high_red_mask_1)
+                        red_mask_2 = cv2.inRange(crop_img_HSV, low_red_mask_2, high_red_mask_2)
+                        dark_mask_1 = cv2.inRange(crop_img_HSV, low_darkpurple_mask, high_darkpurple_mask)
+                        dark_mask_2 = cv2.inRange(crop_img_HSV, low_darkred_mask, high_darkred_mask)
+                        dark_mask_3 = cv2.inRange(crop_img_HSV, low_darkbrown_mask, high_darkbrown_mask)
+                        M_red = cv2.add(red_mask_1, red_mask_2)  # M is the red mask extracted from the detected region
+                        M_orange = cv2.inRange(crop_img_HSV, low_orange_mask, high_orange_mask)
+                        M_darkred = cv2.add(dark_mask_1, dark_mask_2, dark_mask_3)
 
-                        # Score computation -> Number of coincident pixels / Total number of pixels * 100 (percent)
-                        forbid_corr_score = int((forbid_corr_coefficient / self.forbid_pixels_proportion) * 100)
-                        warning_corr_score = int((warning_corr_coefficient / self.warning_pixels_proportion) * 100)
-                        stop_corr_score = int((stop_corr_coefficient / self.stop_pixels_proportion) * 100)
+                        # Filter what mask gets better definition for the doing the correlation
+                        M_red_mean = M_red.mean()
+                        M_orange_mean = M_orange.mean()
+                        M_darkred_mean = M_darkred.mean()
+                        if 10 < M_red_mean < 70 or 30 < M_orange_mean < 70 or 30 < M_darkred_mean < 70:
+                            if M_darkred_mean >= M_orange_mean and M_darkred_mean >= M_red_mean:
+                                M = M_darkred
+                            elif M_orange_mean >= M_red_mean and M_orange_mean >= M_darkred_mean:
+                                M = M_orange
+                            else:
+                                M = M_red
 
-                        scores = [forbid_corr_score, warning_corr_score, stop_corr_score]
+                            # Correlate M with each mask obtained by the training: Multiply element by element
+                            forbid_correlated = M * self.forbid_mask
+                            warning_correlated = M * self.warning_mask
+                            stop_correlated = M * self.stop_mask
 
-                        # This value can be adjusted for reducing noisy detections
-                        # We decided to keep it lower for detecting the majority
-                        # of signals even though it detects some noise too
-                        no_signal_threshold = 10
-                        if forbid_corr_score > no_signal_threshold \
-                                or warning_corr_score > no_signal_threshold \
-                                or stop_corr_score > no_signal_threshold:
+                            # Add all the matching points between them to obtain a correlation coefficient
+                            forbid_corr_coefficient = forbid_correlated.sum()
+                            warning_corr_coefficient = warning_correlated.sum()
+                            stop_corr_coefficient = stop_correlated.sum()
+
+                            # Score computation -> Number of coincident pixels / Total number of pixels * 100 (percent)
+                            forbid_corr_score = int((forbid_corr_coefficient / self.forbid_pixels_proportion) * 100)
+                            warning_corr_score = int((warning_corr_coefficient / self.warning_pixels_proportion) * 100)
+                            stop_corr_score = int((stop_corr_coefficient / self.stop_pixels_proportion) * 100)
+
+                            # Set up a scores array for saving the correlation scores and output them in the results
+                            scores = [forbid_corr_score, warning_corr_score, stop_corr_score]
 
                             # Fill the X_test matrix with each computed HOG descriptors
                             X_test, _ = extract_HOG_features([crop_region])

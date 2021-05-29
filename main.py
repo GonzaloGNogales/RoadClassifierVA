@@ -15,6 +15,8 @@ if __name__ == '__main__':
         '--test_path', type=str, default='./test_reconocimiento/', help='Path al directorio de imgs de test')
     parser.add_argument(
         '--classifier', type=str, default='BAYES-LDA', help='String con el nombre del clasificador')
+    parser.add_argument(
+        '--video', type=str, default='NO', help='Si escribimos yes se realiza el video, si no, ejecuta todo igual')
 
     args = parser.parse_args()
     classifier = None
@@ -73,12 +75,60 @@ if __name__ == '__main__':
         # Training
         status = detector.fit()
 
-        # Load testing data
-        detector.preprocess_data(vars(args)['test_path'], False)
+        # Load testing data (it can be from ./test/ directory or from a personal video)
+        if args.video == 'YES':
+            # Prepare the video testing directory
+            if os.path.isdir('test_video/'):
+                shutil.rmtree('test_video/')
+            os.mkdir('test_video/')
+            print('test_video/ directory ready for processing')
+
+            # Start capturing the video and save the frames with jpg format into the test_video directory
+            video = cv2.VideoCapture('video_prueba.mp4')
+            print('Processing video frames! wait few minutes...')
+            success, image = video.read()
+            count = 0
+            while success:
+                cv2.imwrite('test_video/%d.jpg' % count, image)  # save frame as JPEG file
+                success, image = video.read()
+                count += 1
+            print('Finished processing video frames!')
+            detector.preprocess_data('./test_video/', False)
+        else:
+            detector.preprocess_data(vars(args)['test_path'], False)
 
         # Testing -> see results in ./resultado_imgs/
         detector.predict(status)
 
+        if args.video == 'YES':
+            directory = './resultado_imgs/'
+            final_video_array = list()
+            it = 0
+            total = len(os.listdir(directory))
+            if total != 0:
+                progress_bar(it, total, prefix='Loading video frames: ', suffix='Complete', length=50)
+            for frame in os.listdir(directory):
+                it += 1
+                progress_bar(it, total, prefix='Loading video frames: ', suffix='Complete', length=50)
+                if os.path.isfile(directory + frame) and frame.endswith('.jpg'):
+                    f = cv2.imread(directory + frame)
+                    final_video_array.append((f, frame))
+            h, w, _ = final_video_array[0][0].shape
+            size = (w, h)
+            output_video = cv2.VideoWriter('video_prueba_detectado.avi', cv2.VideoWriter_fourcc(*'DIVX'), 30, size)
+
+            # Progress bar for giving feedback to the users
+            final_video_array.sort(key=lambda tup: int(tup[1][:-4]))
+            it = 0
+            total = len(final_video_array)
+            if total != 0:
+                progress_bar(it, total, prefix='Video mounting progress: ', suffix='Complete', length=50)
+            for i in range(len(final_video_array)):
+                it += 1
+                progress_bar(it, total, prefix='Video mounting progress: ', suffix='Complete', length=50)
+                output_video.write(final_video_array[i][0])
+            output_video.release()
+            print('The video is finished! See the results playing the file: video_prueba_detectado.avi')
     else:
         print("Please introduce the options \"--train_path <train_path> --test_path <test_path> "
               "--classifier <classifier_name>\" in the command line of the terminal")
